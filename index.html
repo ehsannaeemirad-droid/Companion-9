@@ -439,6 +439,8 @@ body[data-page="home"] .back-btn,body:not([data-page="lesson"]) .map-btn{display
 .voc-colloc .cc{margin-bottom:12px;font-size:14px}
 .voc-colloc .cc b{display:block;color:var(--accent);margin-bottom:2px}
 .voc-colloc .cc .en{display:block;font-style:italic;font-size:13px;color:var(--fg-soft)}
+.voc-colloc .cc .cc-fa{display:block;font-family:var(--farsi);direction:rtl;text-align:right;font-size:15px;line-height:1.8;color:var(--fg);margin:2px 0 4px}
+.voc-colloc .voc-h{font-size:11px;letter-spacing:.12em;text-transform:uppercase;color:var(--fg-soft);margin-bottom:8px}
 .voc-frame{margin-top:10px;font-size:13.5px;text-align:left;direction:ltr;color:var(--fg-soft);border-top:1px solid var(--line);padding-top:10px;width:100%}
 .flashcard.rich .flashcard-face{overflow-y:auto;justify-content:flex-start;padding-top:28px}
 .flashcard.rich .word{font-size:28px;margin-bottom:4px}
@@ -678,10 +680,10 @@ function buildFeed(id){
   push({type:"overview",section:"Overview"});
 
   push({type:"section-intro",section:"Vocabulary",num:"01",name:"Vocabulary",desc:`${L.vocab.length} expressions to learn. Tap a card to flip it, or turn on Auto-reveal.`,count:L.vocab.length});
-  L.vocab.forEach((v,i)=>push({type:"vocab",section:"Vocabulary",idx:i,total:L.vocab.length,word:v[0],fa:v[2],ex:v[3],kind:v[1]}));
+  L.vocab.forEach((v,i)=>{const nv=vocNorm(v);push({type:"vocab",section:"Vocabulary",idx:i,total:L.vocab.length,word:nv.word,fa:nv.fa,ex:nv.ex,kind:nv.kind,rich:nv.rich,richColloc:nv.richColloc,richChunks:nv.richChunks});});
 
   push({type:"section-intro",section:"Matching",num:"02",name:"Matching",desc:"Connect each expression with its meaning. Short sets of five.",count:2});
-  for(let s=0;s*5<L.vocab.length;s++)push({type:"matching",section:"Matching",set:s+1,sets:Math.ceil(L.vocab.length/5),pairs:L.vocab.slice(s*5,s*5+5)});
+  for(let s=0;s*5<L.vocab.length;s++)push({type:"matching",section:"Matching",set:s+1,sets:Math.ceil(L.vocab.length/5),pairs:L.vocab.slice(s*5,s*5+5).map(vocNorm)});
 
   push({type:"section-intro",section:"Gap-fill",num:"03",name:"Gap-fill",desc:"Fill in the missing expression. Ten questions in context.",count:10});
   const gaps=buildGapfill(L).slice(0,10);
@@ -786,10 +788,10 @@ function renderCard(c){
    SESSIONS (Version 1) — short study chunks built from lesson parts
    ============================================================ */
 function posKey(){return "ts3_feed_pos_"+S.lesson+(S.sess?"_"+S.sess.id:"");}
+/* vocNorm — V2 vocab entry to render model. V1 tuple path removed after the 12/12 V2 migration. */
 function vocNorm(v){
-  if(Array.isArray(v))return {word:v[0],kind:v[1],fa:v[2],ex:v[3]};
-  const ex=(v.colloc&&v.colloc[0]&&v.colloc[0].ex)||"";
-  return {word:v.word,kind:"vocab",fa:v.fa,ex,rich:v};
+  const pairs=a=>(a||[]).map(c=>({phrase:c.en,fa:c.fa||"",ex:c.ex||""}));
+  return {word:v.en,kind:v.type||"vocab",fa:v.fa||"",ex:v.ex||"",rich:v,richColloc:pairs(v.collocations),richChunks:pairs(v.chunks)};
 }
 function buildSession(id,sess){
   const L=LESSONS[id],cards=[],push=c=>cards.push({...c,_i:cards.length});
@@ -810,7 +812,7 @@ function buildSession(id,sess){
     else if(p.t==="comprehension")L[p.src||"texts"][p.text].detailed.slice(2).forEach((q,i)=>push({type:"reading-scan",section:"Comprehension",idx:p.text,qi:i+2,...L[p.src||"texts"][p.text]}));
     else if(p.t==="writingSample")push({type:"writing-sample",section:"Writing",title:p.title||"Sample",text:p.text});
     else if(p.t==="writingPoints")push({type:"grammar-teach",section:"Writing",idx:0,total:1,title:p.title||"Writing points",body:p.html,kicker:"Writing points"});
-    else if(p.t==="vocab")L.vocab.slice(p.from,p.to).forEach((v,k)=>{const nv=vocNorm(v);push({type:"vocab",section:"Vocabulary",idx:p.from+k,total:L.vocab.length,word:nv.word,fa:nv.fa,ex:nv.ex,kind:nv.kind,rich:nv.rich});});
+    else if(p.t==="vocab")L.vocab.slice(p.from,p.to).forEach((v,k)=>{const nv=vocNorm(v);push({type:"vocab",section:"Vocabulary",idx:p.from+k,total:L.vocab.length,word:nv.word,fa:nv.fa,ex:nv.ex,kind:nv.kind,rich:nv.rich,richColloc:nv.richColloc,richChunks:nv.richChunks});});
     else if(p.t==="matching")p.sets.forEach(n=>push({type:"matching",section:"Matching",set:n,sets:Math.ceil(L.vocab.length/5),pairs:L.vocab.slice((n-1)*5,n*5).map(vocNorm)}));
     else if(p.t==="gap")buildGapfill(L).slice(0,10).forEach((q,i,a)=>push({type:"gap",section:"Gap-fill",idx:i,total:a.length,...q}));
     else if(p.t==="test"){const all=L.grammar.testSets.flatMap(x=>x.qs);all.forEach((q,i)=>push({type:"test-q",section:"Test",idx:i,total:all.length,...q}));}
@@ -1100,10 +1102,13 @@ function highlightWord(text,word){
 }
 function renderVocab(c){
   const pct=((c.idx+1)/c.total)*100;
-  const rich=c.rich;
+  const rich=c.rich,rc=c.richColloc||[],rk=c.richChunks||[];
   const frontExtra=(rich&&rich.dialogue)?`<div class="voc-dialogue">${rich.dialogue.map(l=>`<p><b>${esc(l.sp)}:</b> ${highlightWord(l.text,c.word)}</p>`).join("")}</div>`:"";
+  const pairHTML=cc=>`<div class="cc"><b>${esc(cc.phrase)}</b>${cc.fa?`<span class="cc-fa" dir="rtl">${esc(cc.fa)}</span>`:""}${cc.ex?`<span class="en">${esc(cc.ex)}</span>`:""}</div>`;
+  const groupHTML=(label,arr)=>arr.length?`<div class="voc-colloc"><div class="voc-h">${label}</div>${arr.map(pairHTML).join("")}</div>`:"";
   const backExtra=rich?`
-        <div class="voc-colloc">${(rich.colloc||[]).map(cc=>`<div class="cc"><b>${esc(cc.phrase)}</b><span class="en">${esc(cc.ex)}</span></div>`).join("")}</div>
+        ${groupHTML("Collocations",rc)}
+        ${groupHTML("Chunks",rk)}
         ${rich.frame?`<div class="voc-frame">💬 ${esc(rich.frame)}</div>`:""}`
     : `<div class="ex">"${esc(c.ex)}"</div>`;
   return wrapCard(c,`
@@ -1393,7 +1398,8 @@ function localWordMeaning(word){
   if(typeof WORDS!=="undefined"){for(const k of [key,key.replace(/(ing|ed|es|s|d)$/,"")])if(WORDS[k])return WORDS[k];}
   // vocab
   for(const v of (L.vocab||[])){
-    if(String(v[0]).toLowerCase()===key)return v[2];
+    const nv=vocNorm(v);
+    if(String(nv.word).toLowerCase().replace(/[^a-z'-]/g,"")===key)return nv.fa;
   }
   // glossaries in passages and texts
   const sources=[...(L.grammar?.passages||[]),...(L.texts||[])];
@@ -2869,11 +2875,111 @@ document.addEventListener("keydown",e=>{
 });
 
 /* ============================================================
+   DATA VALIDATOR — fail-soft in production, fail-loud in dev.
+   Fix the data, never weaken these checks.
+   Production (default): every violation is logged to the console
+   naming lesson/index/field, the offending item is quarantined so
+   renderers skip it, and boot proceeds — the app stays usable.
+   Dev mode (DEV_MODE constant below, committed as false, or a
+   ?dev=1 query param): red overlay + throw, so a developer
+   cannot miss a data bug.
+   ============================================================ */
+const DEV_MODE=false;
+function validateLessons(){
+  const isFa=s=>/[\u0600-\u06FF]/.test(s||"");
+  const pairOK=p=>!!(p&&p.en&&isFa(p.fa));
+  const problems=[];
+  const expect=["1A","1B","1C","1D","2A","2B","2C","2D","3A","3B","3C","3D"];
+  expect.forEach(id=>{ if(!LESSONS[id]) problems.push("missing lesson "+id); });
+  if(Object.keys(LESSONS).length!==12) problems.push("expected 12 lessons, got "+Object.keys(LESSONS).length);
+  expect.forEach(id=>{
+    const L=LESSONS[id]; if(!L)return;
+    if(!Array.isArray(L.vocab)||L.vocab.length!==20) problems.push(id+": vocab must have 20 entries, got "+(L.vocab&&L.vocab.length));
+    (L.vocab||[]).forEach((v,i)=>{
+      if(!v||typeof v!=="object"||Array.isArray(v)){problems.push(id+".vocab["+i+"]: not a V2 object");return;}
+      if(!v.en||!v.type||!isFa(v.fa)) problems.push(id+".vocab["+i+"]: en/type missing or fa is not Farsi");
+      const chk=(arr,name)=>{ if(!Array.isArray(arr)||arr.length!==2){problems.push(id+".vocab["+i+"]: "+name+" must have exactly 2 pairs");return;} arr.forEach((p,j)=>{ if(!p||!p.en||!isFa(p.fa)) problems.push(id+".vocab["+i+"]."+name+"["+j+"]: pair missing en or Farsi fa"); }); };
+      chk(v.collocations,"collocations"); chk(v.chunks,"chunks");
+    });
+    if(!Array.isArray(L.texts)||L.texts.length!==2) problems.push(id+": expected exactly 2 texts");
+    (L.texts||[]).forEach((t,i)=>{ if(!t.translationFa) problems.push(id+".texts["+i+"]: missing translationFa"); });
+    if(L.grammar&&Array.isArray(L.grammar.passages)) L.grammar.passages.forEach((p,i)=>{ if(!p.translationFa) problems.push(id+".grammar.passages["+i+"]: missing translationFa"); });
+    /* 1D.mainReading is exempt from the translationFa requirement by policy (Phase 6). */
+  });
+  if(!problems.length){
+    console.info("validateLessons: OK — 12 lessons, 240 V2 vocab entries, 24 texts with translationFa");
+    return;
+  }
+  let dev=false;
+  try{ dev=(typeof DEV_MODE!=="undefined"&&DEV_MODE===true)||new URLSearchParams(location.search).get("dev")==="1"; }catch(e){ dev=false; }
+  if(dev){
+    console.error("validateLessons (DEV fail-loud):",problems);
+    const el=document.createElement("div");
+    el.style.cssText="position:fixed;inset:auto 0 0 0;z-index:9999;background:#b3261e;color:#fff;font:14px/1.5 sans-serif;padding:10px 14px;white-space:pre-wrap";
+    el.textContent="Data error — "+problems.length+" problem(s). See console for details.\n"+problems.slice(0,6).join("\n");
+    if(document.body)document.body.appendChild(el);else document.addEventListener("DOMContentLoaded",()=>document.body.appendChild(el));
+    throw new Error("validateLessons: "+problems.length+" data problem(s)");
+  }
+  /* Production fail-soft: log each violation, quarantine offenders, keep booting. */
+  problems.forEach(p=>console.error("[data]",p));
+  console.error("validateLessons (fail-soft): "+problems.length+" data problem(s) logged above; offending items skipped; app continues. Fix lessons.js.");
+  expect.forEach(id=>{
+    const L=LESSONS[id]; if(!L)return;
+    /* A wholly missing lesson cannot be quarantined here (the shelf reads
+       LESSONS[id].ready directly); it is logged above. Every item-level
+       offender is quarantined below so renderers skip it. */
+    if(Array.isArray(L.vocab)){
+      const before=L.vocab.length;
+      L.vocab=L.vocab.filter(v=>(v&&typeof v==="object"&&!Array.isArray(v)&&v.en&&v.type&&isFa(v.fa))).map(v=>({
+        ...v,
+        collocations:Array.isArray(v.collocations)?v.collocations.filter(pairOK):[],
+        chunks:Array.isArray(v.chunks)?v.chunks.filter(pairOK):[]
+      }));
+      const dropped=before-L.vocab.length;
+      if(dropped>0) console.error("[data] "+id+": quarantined "+dropped+" vocab item(s) that could not render.");
+    }
+    /* texts/grammar translationFa gaps need no quarantine: renderers already
+       fall back to English-only presentation when translationFa is falsy. */
+  });
+}
+validateLessons();
+/* ============================================================
    BOOT
    ============================================================ */
-/* Register service worker when served from HTTPS/localhost (required for installable offline PWA). */
+/* PWA update flow: register the worker; when a new version is installed,
+   show a refresh prompt. The worker already skipWaiting()s, so once it
+   claims the tab the user taps the button to reload into the new version. */
 if("serviceWorker" in navigator && (location.protocol==="https:" || location.hostname==="localhost")){
-  window.addEventListener("load",()=>navigator.serviceWorker.register("./sw.js").catch(err=>console.warn("PWA service worker registration failed",err)));
+  window.addEventListener("load",()=>{
+    navigator.serviceWorker.register("./sw.js").then(reg=>{
+      const showBanner=()=>{
+        if(document.getElementById("sw-update"))return;
+        const b=document.createElement("div");
+        b.id="sw-update";
+        b.style.cssText="position:fixed;left:50%;transform:translateX(-50%);bottom:18px;z-index:9998;background:var(--card,#fff);color:var(--fg,#111);border:1px solid var(--line,#ddd);border-radius:14px;box-shadow:0 8px 24px rgba(0,0,0,.18);padding:10px 14px;display:flex;gap:10px;align-items:center;font:14px/1.4 sans-serif";
+        const msg=document.createElement("span");
+        msg.dir="rtl";
+        /* TODO(fa-review) */
+        msg.textContent="نسخهٔ جدید آماده است";
+        const btn=document.createElement("button");
+        btn.dir="rtl";
+        /* TODO(fa-review) */
+        btn.textContent="به‌روزرسانی";
+        btn.style.cssText="border:0;border-radius:9px;padding:6px 12px;background:var(--c,#2f6df6);color:#fff;font:inherit;cursor:pointer";
+        btn.onclick=()=>location.reload();
+        b.append(msg,btn);
+        (document.body||document.documentElement).appendChild(b);
+      };
+      reg.addEventListener("updatefound",()=>{
+        const w=reg.installing;
+        if(!w)return;
+        w.addEventListener("statechange",()=>{ if(w.state==="installed"&&navigator.serviceWorker.controller) showBanner(); });
+      });
+      let hadController=!!navigator.serviceWorker.controller;
+      navigator.serviceWorker.addEventListener("controllerchange",()=>{ if(hadController) showBanner(); hadController=true; });
+      if(reg.waiting&&navigator.serviceWorker.controller) showBanner();
+    }).catch(err=>console.warn("PWA service worker registration failed",err));
+  });
 }
 (function boot(){
   document.documentElement.setAttribute("data-theme",theme);
