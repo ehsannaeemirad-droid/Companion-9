@@ -431,6 +431,15 @@ body[data-page="home"] .back-btn,body:not([data-page="lesson"]) .map-btn{display
 .tapfind-lines{display:flex;flex-direction:column;gap:8px}
 .tf-line{text-align:left;padding:12px 14px;border-radius:14px;background:var(--card-2);border:1.5px solid var(--line);line-height:1.5;font-size:14.5px}
 .tf-line.found{background:var(--ok-soft);border-color:var(--ok)}
+/* Phase B: Conversation card (3C pilot) */
+.conv-tabs{display:flex;gap:6px;margin:8px 0 12px}
+.conv-tab{flex:1;padding:8px 4px;border-radius:10px;background:var(--card-2);border:1.5px solid var(--line);font-size:13px;font-weight:700;color:var(--fg-soft);text-align:center;cursor:pointer}
+.conv-tab.on{background:color-mix(in srgb,var(--accent) 18%,transparent);border-color:var(--accent);color:var(--accent)}
+.conv-q{margin-bottom:18px}
+.conv-qstem{font-size:16px;font-weight:700;line-height:1.4;margin:0 0 8px;color:var(--fg)}
+.conv-sample{font-style:italic;line-height:1.7;text-align:justify;color:var(--fg-soft)}
+.gl.chunk{color:#34D399;background:rgba(52,211,153,.12);border-bottom:2px solid rgba(52,211,153,.55);font-style:normal;font-weight:500}
+.gl.chunk:hover,.gl.chunk.active{background:rgba(52,211,153,.28)}
 .reader p{text-align:justify}
 .voc-dialogue{margin-top:14px;text-align:left;direction:ltr;font-size:13.5px;line-height:1.6;color:var(--fg-soft);max-height:34vh;overflow-y:auto}
 .voc-dialogue p{margin-bottom:8px}
@@ -465,6 +474,8 @@ body[data-page="home"] .back-btn,body:not([data-page="lesson"]) .map-btn{display
 .hm-go{font-size:22px;color:var(--accent)}
 .hm-count{font-size:12px;font-weight:700;color:var(--muted)}
 .hm-path{padding:4px 0 8px}
+.hm-section-start{display:flex;align-items:center;justify-content:center;gap:8px;width:100%;padding:12px 16px;margin:6px 0 12px;border-radius:14px;background:color-mix(in srgb,var(--accent) 14%,transparent);border:1.5px solid var(--accent);color:var(--accent);font-size:14px;font-weight:700;cursor:pointer;transition:all .12s}
+.hm-section-start:hover{background:color-mix(in srgb,var(--accent) 22%,transparent)}
 .hm-node{display:flex;align-items:center;gap:14px;width:100%;padding:9px 2px;position:relative}
 .hm-node+.hm-node::before{content:"";position:absolute;left:23px;top:-50%;height:100%;width:2px;background:var(--line-strong)}
 .hm-node .dot{position:relative;z-index:1;width:42px;height:42px;border-radius:50%;display:grid;place-items:center;font-size:13px;font-weight:800;background:var(--card);border:2px solid var(--line-strong);color:var(--fg-soft)}
@@ -781,7 +792,42 @@ function renderCard(c){
   if(c.type==="cp-result")return renderCpResult(c);
   if(c.type==="quiz-result")return renderQuizResult(c);
   if(c.type==="session-done")return renderSessionDone(c);
+  if(c.type==="conversation")return renderConversation(c);
   return "";
+}
+
+/* ============================================================
+   CONVERSATION CARD (Phase B — 3C pilot)
+   Renders one card per part (A/B/C). Sample answer paragraph with
+   **chunk** substrings rendered as tappable highlights (reuses .gl
+   vocab-chip style). Tap → bottom sheet with chunk.en/def/example/fa
+   + "Add to flashcards" button calling addSrs({type:"chunk",...}).
+   ============================================================ */
+function renderConversation(c){
+  const part=c.part; // {id, title, titleFa, questions: [{id, question, sample, chunks: [{en,def,example,fa}]}]}
+  const tabsHtml=part._allParts.map(p=>`<button class="conv-tab ${p.id===part.id?"on":""}" data-conv-tab="${p.id}">${p.id}</button>`).join("");
+  // Stash part.id on the section element so the [data-conv-tab] binding can scroll to it
+  return wrapCard(c,`
+    <div class="kicker">${c.section} · Part ${part.id}</div>
+    <div class="conv-tabs">${tabsHtml}</div>
+    <h2 class="h-med qstem">${esc(part.title)}</h2>
+    <div class="conv-questions">
+      ${part.questions.map(q=>`
+        <div class="conv-q" data-conv-q="${q.id}">
+          <h3 class="conv-qstem">${esc(q.question)}</h3>
+          <div class="p conv-sample">${renderConversationSample(q.sample)}</div>
+        </div>
+      `).join("")}
+    </div>
+  `).replace('data-idx="'+c._i+'"','data-idx="'+c._i+'" data-part-id="'+part.id+'"');
+}
+function renderConversationSample(sample){
+  // Render **chunk** substrings as tappable <span class="gl chunk"> elements.
+  // The text between chunks is escaped. chunk.en is stored in data-chunk-en so the
+  // binder can look up the chunk object for the popup.
+  return esc(sample).replace(/\*\*([^*]+)\*\*/g,(m,en)=>{
+    return `<span class="gl chunk" data-chunk-tap="${escAttr(en)}">${esc(en)}</span>`;
+  });
 }
 
 /* ============================================================
@@ -793,9 +839,51 @@ function vocNorm(v){
   const pairs=a=>(a||[]).map(c=>({phrase:c.en,fa:c.fa||"",ex:c.ex||""}));
   return {word:v.en,kind:v.type||"vocab",fa:v.fa||"",ex:v.ex||"",rich:v,richColloc:pairs(v.collocations),richChunks:pairs(v.chunks)};
 }
-function buildSession(id,sess){
+function buildSession(id,sessOrSection){
   const L=LESSONS[id],cards=[],push=c=>cards.push({...c,_i:cards.length});
-  sess.parts.forEach(p=>{
+  // Section-aware mode (Phase B): if sessOrSection is a string ("coursebook" | "extra"),
+  // aggregate all sessions of that stage. For 3C + "extra" section, also emit conversation
+  // cards from L.conversation.parts. Graceful degradation: lessons without L.conversation
+  // or L.writing still work (extra section just emits readings + writing).
+  //
+  // Per locked rule: "extra" section emits conversation + readings + writing ONLY — never
+  // vocab/matching/gap/quiz. (Existing per-session flow keeps all part types; this filter
+  // applies ONLY to section-aware mode.) Rationale: the new "Extra" section view is meant
+  // for supplementary practice — vocab cards live in their own sessions under Coursebook.
+  if(typeof sessOrSection==="string"){
+    const section=sessOrSection;
+    const stageName=section==="coursebook"?"Coursebook":"Extra";
+    // Part types to EXCLUDE from "extra" section (vocab + matching + gap + quiz belong to
+    // their own dedicated sessions, not the section-wide view).
+    const EXTRA_EXCLUDE = section==="extra" ? new Set(["vocab","matching","gap","quiz","quizset","convo"]) : new Set();
+    (L.sessions||[]).filter(s=>s.stage===stageName).forEach(sess=>{
+      sess.parts.forEach(p=>{
+        if(EXTRA_EXCLUDE.has(p.t))return;
+        emitPart(p,L,sess,cards,push);
+      });
+    });
+    // 3C extra: add conversation cards (one per part — A, B, C). Each card shows ALL
+    // questions of that part with tappable chunk highlights. Granularity rationale: a
+    // 30-card conversation feed would be exhausting to scroll; one card per part keeps
+    // each part's questions grouped and lets the part-tab navigation jump between them.
+    if(section==="extra"&&L.conversation&&L.conversation.parts){
+      const parts=L.conversation.parts;
+      parts.forEach((part,i)=>{
+        push({type:"conversation",section:"Conversation",part:{...part,_allParts:parts},idx:i,total:parts.length});
+      });
+    }
+    push({type:"session-done",section:"Wrap"});
+    return cards;
+  }
+  // Original per-session mode (existing behavior, unchanged)
+  const sess=sessOrSection;
+  sess.parts.forEach(p=>emitPart(p,L,sess,cards,push));
+  push({type:"session-done",section:"Wrap"});
+  return cards;
+}
+// emitPart — factored out from the original buildSession body so section-aware mode can
+// re-use the exact same emission logic. Pure function: reads L/sess/p, pushes to cards.
+function emitPart(p,L,sess,cards,push){
     if(p.t==="quiz"){L.quiz.forEach((q,i)=>push({type:"quiz-q",section:"Getting started",idx:i,total:L.quiz.length,...q}));push({type:"quiz-result",section:"Getting started"});}
     else if(p.t==="circle")L.circle.forEach((q,i)=>push({type:"grammar-check",section:"Grammar",idx:i,kicker:`Circle the correct word · ${i+1} of ${L.circle.length}`,topic:"Circle the correct words",...q}));
     else if(p.t==="exA")L.exA.forEach((q,i)=>push({type:"grammar-check",section:"Grammar",idx:i,kicker:`Exercise A · ${i+1} of ${L.exA.length}`,topic:"Exercise A",...q}));
@@ -819,9 +907,6 @@ function buildSession(id,sess){
     else if(p.t==="passages")L.grammar.passages.forEach((x,i)=>push({type:"passage",section:"Passages",idx:i,...x}));
     else if(p.t==="reading"){const t=L.texts[p.text],i=p.text;push({type:"reading-skim",section:"Reading",idx:i,...t});push({type:"reading-scan",section:"Reading",idx:i,...t});push({type:"reading-full",section:"Reading",idx:i,...t});for(let qi=1;qi<(t.detailed||[]).length;qi++)push({type:"reading-scan",section:"Reading",idx:i,qi,...t});}
     else if(p.t==="writing"){if(p.key==="taskOnly"&&L.writingTask){push({type:"writing",section:"Writing",idx:0,...L.writingTask});}else L.writing.prompts.forEach((x,i)=>push({type:"writing",section:"Writing",idx:i,...x}));}
-  });
-  push({type:"session-done",section:"Wrap"});
-  return cards;
 }
 function renderPath(){
   const L=LESSONS[S.lesson],box=$("#pathInner"),ss=L.sessions,dn=x=>!!progress[S.lesson+"_s_"+x.id];
@@ -829,15 +914,55 @@ function renderPath(){
   let h=`<div class="hm-top"><div class="hm-brand">Lesson ${S.lesson}</div><span class="hm-chip">${n}/${ss.length}</span></div>
   <h1 class="hm-hello" style="font-size:26px;margin-bottom:6px">${esc(L.title)}</h1><div class="pth-fa">${esc(L.titleFa||"")}</div>
   <div class="pth-bar"><i style="width:${Math.round(n/ss.length*100)}%"></i></div>`;
+  // Pre-compute which sections have cards via section-aware buildSession. We probe each stage
+  // and only emit the "Start [stage]" button if buildSession returns at least one card. This
+  // also handles graceful degradation: 2A's Extra button appears (writing+readings), but a
+  // hypothetical lesson with no Extra sessions wouldn't get the button.
+  const sectionHasCards = (section) => {
+    try { return buildSession(S.lesson, section).length > 1; } // >1 to exclude the "session-done" wrap card
+    catch(e){ return false; }
+  };
   let stage="";
   ss.forEach(x=>{
-    if(x.stage!==stage){if(stage)h+="</div>";stage=x.stage;h+=`<div class="pth-stage">${stage==="Coursebook"?"📖 Coursebook":"⭐ Extra practice"}</div><div class="hm-path">`;}
+    if(x.stage!==stage){
+      if(stage)h+="</div>";
+      stage=x.stage;
+      const sectionName=stage==="Coursebook"?"coursebook":"extra";
+      const stageLabel=stage==="Coursebook"?"📖 Coursebook":"⭐ Extra practice";
+      h+=`<div class="pth-stage">${stageLabel}</div>`;
+      // Section-level "Start" button — only if buildSession(lessonId, section) would return cards.
+      if(sectionHasCards(sectionName)){
+        h+=`<button class="hm-section-start" data-section="${sectionName}">▶ Start ${esc(stageLabel.replace(/^[^\s]+\s/,""))}</button>`;
+      }
+      h+=`<div class="hm-path">`;
+    }
     const d=dn(x),nx=next&&next.id===x.id;
     h+=`<button class="hm-node ${d?"done":nx?"now":""}" data-sess="${x.id}"><span class="dot">${d?"✓":x.icon}</span><span class="tx"><span class="tt">${esc(x.title)}</span></span>${nx?'<span class="pn-go">Start</span>':d?'<span class="pn-go dim">Again</span>':""}</button>`;
   });
   box.innerHTML=h+"</div>";
   box.querySelectorAll("[data-sess]").forEach(b=>b.onclick=()=>openSession(b.dataset.sess));
+  // Wire section-level "Start" buttons to openSection(lessonId, section)
+  box.querySelectorAll("[data-section]").forEach(b=>b.onclick=()=>openSection(S.lesson,b.dataset.section));
   $("#pathPage").scrollTop=0;
+}
+// openSection(lessonId, section) — Phase B/C UI wiring. Calls the section-aware
+// buildSession(lessonId, section) (string 2nd arg) to aggregate all sessions of that
+// stage. Reuses openSession's runtime init machinery (render feed, bind, scroll, HUD).
+// S.sess is set to null so per-session-done bookkeeping (markDone, sdNext, etc.) doesn't
+// fire — section mode is a free-form study view, not a tracked session.
+function openSection(lessonId,section){
+  if(!LESSONS[lessonId])return;
+  S.lesson=lessonId;
+  S.sess=null; // section mode: no per-session bookkeeping
+  S.testRes={};S.answers={};S.quiz={};S.reviewMode=false;S.remedial={};S.streak=0;S.quizBatch=null;
+  S.cards=buildSession(lessonId,section);
+  S.flipped=new Set();S.activeIdx=0;S.lastSpokenIdx=-1;
+  $("#feed").innerHTML=S.cards.map(c=>renderCard(c)).join("");
+  $("#hudTotal").textContent=S.cards.length;
+  bindFeed();showPage("lesson");document.body.dataset.mode="session";
+  requestAnimationFrame(()=>{setupObserver();});
+  $("#feed").scrollTop=0;
+  updateHUD(0);startTime("learn");
 }
 function openSession(sid){
   const L=LESSONS[S.lesson],sess=L.sessions.find(x=>x.id===sid);if(!sess)return;
@@ -2129,6 +2254,64 @@ function bindFeed(){
       else showChrome();
     }
   });
+
+  /* ===== Phase B: Conversation card bindings (3C pilot) ===== */
+  // Tappable chunk highlights in conversation samples → show chunk sheet
+  feed.querySelectorAll("[data-chunk-tap]").forEach(el=>{
+    if(el._chunkBound)return; el._chunkBound=true;
+    el.addEventListener("click",e=>{
+      e.stopPropagation();
+      if(window.getSelection().toString().length)return;
+      const en=el.dataset.chunkTap;
+      // Look up the chunk in the current card's part data
+      const card=el.closest(".card"),c=S.cards[+card.dataset.idx];
+      if(!c||!c.part)return;
+      let chunk=null;
+      for(const q of c.part.questions){
+        const f=q.chunks.find(ch=>ch.en===en);
+        if(f){chunk=f;break;}
+      }
+      if(!chunk)return;
+      // Highlight this chunk, dim others
+      card.querySelectorAll(".gl.chunk.active").forEach(x=>x.classList.remove("active"));
+      el.classList.add("active");
+      showChunkPopup(el,chunk);
+    });
+  });
+  // Part tabs (A/B/C) — find the card with that part and scroll to it
+  feed.querySelectorAll("[data-conv-tab]").forEach(b=>{
+    b.addEventListener("click",e=>{
+      e.stopPropagation();
+      const targetId=b.dataset.convTab;
+      const targetCard=feed.querySelector(`.card[data-type="conversation"][data-part-id="${targetId}"]`);
+      if(targetCard)targetCard.scrollIntoView({behavior:"smooth",block:"start"});
+    });
+  });
+}
+
+function showChunkPopup(anchorEl,chunk){
+  // chunk: {en, def, example, fa}
+  const html=`
+    <b>${esc(chunk.en)}</b>
+    <div class="en" style="font-size:13px;margin-top:4px">${esc(chunk.def)}</div>
+    <div class="en" style="font-style:italic;font-size:13px;margin-top:6px">${esc(chunk.example)}</div>
+    <div dir="rtl" style="font-family:var(--farsi);font-size:14px;margin-top:8px;text-align:right">${esc(chunk.fa)}</div>
+    <div class="actions">
+      <button class="mini" data-chunk-speak="${escAttr(chunk.en)}">🔊 Play</button>
+      <button class="mini" data-chunk-add>Add to flashcards</button>
+    </div>`;
+  showInlinePopup(anchorEl,html,"chunk-mode");
+  const popup=$("#wordPopup");
+  popup.querySelector("[data-chunk-speak]").onclick=e=>{e.stopPropagation();speak(chunk.en);};
+  popup.querySelector("[data-chunk-add]").onclick=e=>{
+    e.stopPropagation();
+    // Strip the /* TODO(fa-review) */ tag from fa when adding to SRS (the tag is for source review, not for user display)
+    const cleanFa=chunk.fa.replace(/\/\* TODO\(fa-review\) \*\//g,"").trim();
+    const added=addSrs({type:"chunk",front:chunk.en,backFa:cleanFa,ex:chunk.example,lesson:S.lesson});
+    sChime();
+    popup.querySelector("[data-chunk-add]").textContent=added?"Added ✓":"In review";
+    bumpMetric("newChunk",1,{item:chunk.en});
+  };
 }
 
 function addSrs(card){
