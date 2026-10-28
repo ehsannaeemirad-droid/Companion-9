@@ -437,7 +437,13 @@ body[data-page="home"] .back-btn,body:not([data-page="lesson"]) .map-btn{display
 .conv-tab.on{background:color-mix(in srgb,var(--accent) 18%,transparent);border-color:var(--accent);color:var(--accent)}
 .conv-q{margin-bottom:18px}
 .conv-qstem{font-size:16px;font-weight:700;line-height:1.4;margin:0 0 8px;color:var(--fg)}
-.conv-sample{font-style:italic;line-height:1.7;text-align:justify;color:var(--fg-soft)}
+.conv-sample{font-style:italic;line-height:1.7;text-align:justify;color:var(--fg-soft);margin-top:12px}
+.conv-sample[hidden]{display:none!important}
+.conv-controls{display:flex;gap:8px;margin-top:16px;align-items:stretch}
+.conv-nav{flex:0 0 auto;padding:10px 14px;border-radius:12px;background:var(--card-2);border:1.5px solid var(--line);font-family:inherit;font-weight:700;font-size:13px;color:var(--fg-soft);cursor:pointer}
+.conv-nav:disabled{opacity:.35;cursor:default}
+.conv-toggle{flex:1;padding:10px 14px;border-radius:12px;background:color-mix(in srgb,var(--accent) 14%,transparent);border:1.5px solid var(--accent);color:var(--accent);font-family:inherit;font-weight:700;font-size:13px;cursor:pointer}
+.conv-toggle:active{transform:scale(.98)}
 .gl.chunk{color:#34D399;background:rgba(52,211,153,.12);border-bottom:2px solid rgba(52,211,153,.55);font-style:normal;font-weight:500}
 .gl.chunk:hover,.gl.chunk.active{background:rgba(52,211,153,.28)}
 .reader p{text-align:justify}
@@ -805,31 +811,85 @@ function renderCard(c){
    vocab-chip style). Tap → bottom sheet with chunk.en/def/example/fa
    + "Add to flashcards" button calling addSrs({type:"chunk",...}).
    ============================================================ */
+/* renderConversation — one question at a time (UX pass 2026-10-28).
+ * Previously this card rendered ALL questions of a part as a wall of text (Part A = 15
+ * questions), which was overwhelming and scrolled badly on phones. Now each card paints
+ * ONE question: a "Show Sample Answer" toggle (sample is NOT in the DOM until expanded),
+ * and Prev/Next controls. The part state (current question index) lives on the card
+ * element as data-qi, painted by paintConversationQuestion(). Chunk taps inside the
+ * sample are bound lazily by bindChunkTaps() after expansion. */
 function renderConversation(c){
   const part=c.part; // {id, title, titleFa, questions: [{id, question, sample, chunks: [{en,def,example,fa}]}]}
+  const q=part.questions[0];
   const tabsHtml=part._allParts.map(p=>`<button class="conv-tab ${p.id===part.id?"on":""}" data-conv-tab="${p.id}">${p.id}</button>`).join("");
-  // Stash part.id on the section element so the [data-conv-tab] binding can scroll to it
   return wrapCard(c,`
-    <div class="kicker">${c.section} · Part ${part.id}</div>
+    <div class="kicker">${c.section} · Part ${part.id} · Question <span data-conv-qnum>1</span> of ${part.questions.length}</div>
     <div class="conv-tabs">${tabsHtml}</div>
-    <h2 class="h-med qstem">${esc(part.title)}</h2>
-    <div class="conv-questions">
-      ${part.questions.map(q=>`
-        <div class="conv-q" data-conv-q="${q.id}">
-          <h3 class="conv-qstem">${esc(q.question)}</h3>
-          <div class="p conv-sample">${renderConversationSample(q.sample)}</div>
-        </div>
-      `).join("")}
+    <h2 class="h-med qstem" data-conv-title>${esc(part.title)}</h2>
+    <h3 class="conv-qstem" data-conv-qtext>${esc(q.question)}</h3>
+    <div class="conv-sample" data-conv-sample hidden></div>
+    <div class="conv-controls">
+      <button class="conv-nav" data-conv-prev disabled>‹ Prev</button>
+      <button class="conv-toggle" data-conv-toggle>Show Sample Answer</button>
+      <button class="conv-nav" data-conv-next>Next ›</button>
     </div>
-  `).replace('data-idx="'+c._i+'"','data-idx="'+c._i+'" data-part-id="'+part.id+'"');
+  `).replace('data-idx="'+c._i+'"','data-idx="'+c._i+'" data-part-id="'+part.id+'" data-qi="0"');
 }
 function renderConversationSample(sample){
   // Render **chunk** substrings as tappable <span class="gl chunk"> elements.
-  // The text between chunks is escaped. chunk.en is stored in data-chunk-en so the
+  // The text between chunks is escaped. chunk.en is stored in data-chunk-tap so the
   // binder can look up the chunk object for the popup.
   return esc(sample).replace(/\*\*([^*]+)\*\*/g,(m,en)=>{
     return `<span class="gl chunk" data-chunk-tap="${escAttr(en)}">${esc(en)}</span>`;
   });
+}
+/* paintConversationQuestion(card) — repaints a conversation card for its current
+ * data-qi. Always collapses the sample (a fresh question starts with its answer
+ * hidden) and updates the Prev/Next disabled state. textContent is used for the
+ * question stem so HTML entities can never leak into the display. */
+function paintConversationQuestion(card){
+  const c=S.cards[+card.dataset.idx];if(!c||!c.part)return;
+  const part=c.part,qi=Math.max(0,Math.min(+card.dataset.qi||0,part.questions.length-1));
+  card.dataset.qi=String(qi);
+  const q=part.questions[qi];
+  const qn=card.querySelector("[data-conv-qnum]"),qt=card.querySelector("[data-conv-qtext]"),sm=card.querySelector("[data-conv-sample]"),tg=card.querySelector("[data-conv-toggle]"),pv=card.querySelector("[data-conv-prev]"),nx=card.querySelector("[data-conv-next]");
+  if(qn)qn.textContent=String(qi+1);
+  if(qt)qt.textContent=q.question;
+  if(sm){sm.innerHTML="";sm.hidden=true;}
+  if(tg)tg.textContent="Show Sample Answer";
+  if(pv)pv.disabled=qi===0;
+  if(nx)nx.disabled=qi===part.questions.length-1;
+}
+/* bindConversationCard(card) — wires Show/Hide Sample Answer + Prev/Next for one card. */
+function bindConversationCard(card){
+  if(card._convBound)return;card._convBound=true;
+  const c=S.cards[+card.dataset.idx];if(!c||!c.part)return;
+  const tg=card.querySelector("[data-conv-toggle]"),sm=card.querySelector("[data-conv-sample]");
+  if(tg&&sm)tg.addEventListener("click",e=>{
+    e.stopPropagation();
+    if(sm.hidden){
+      const q=c.part.questions[+card.dataset.qi||0];
+      sm.innerHTML=renderConversationSample(q.sample);
+      sm.hidden=false;
+      tg.textContent="Hide Sample Answer";
+      bindChunkTaps(card); // chunks only exist in the DOM after expansion
+    }else{
+      sm.innerHTML="";sm.hidden=true;
+      tg.textContent="Show Sample Answer";
+    }
+  });
+  const pv=card.querySelector("[data-conv-prev]"),nx=card.querySelector("[data-conv-next]");
+  if(pv)pv.addEventListener("click",e=>{e.stopPropagation();card.dataset.qi=String(Math.max(0,(+card.dataset.qi||0)-1));paintConversationQuestion(card);});
+  if(nx)nx.addEventListener("click",e=>{e.stopPropagation();const part=c.part;card.dataset.qi=String(Math.min(part.questions.length-1,(+card.dataset.qi||0)+1));paintConversationQuestion(card);});
+}
+/* gotoConversationPart(feed, partId) — part-tab action: jump to that part's card and
+ * reset it to its FIRST question (UX requirement: tabs switch to question 1). */
+function gotoConversationPart(feed,targetId){
+  const targetCard=feed.querySelector(`.card[data-type="conversation"][data-part-id="${targetId}"]`);
+  if(!targetCard)return;
+  targetCard.dataset.qi="0";
+  paintConversationQuestion(targetCard);
+  targetCard.scrollIntoView({behavior:"smooth",block:"start"});
 }
 
 /* ============================================================
@@ -857,7 +917,7 @@ function buildSession(id,sessOrSection){
     const stageName=section==="coursebook"?"Coursebook":"Extra";
     // Part types to EXCLUDE from "extra" section (vocab + matching + gap + quiz belong to
     // their own dedicated sessions, not the section-wide view).
-    const EXTRA_EXCLUDE = section==="extra" ? new Set(["vocab","matching","gap","quiz","quizset","convo"]) : new Set();
+    const EXTRA_EXCLUDE = section==="extra" ? new Set(["vocab","matching","gap","quiz","quizset","convo","conversation"]) : new Set(); // "conversation" excluded here: the marquee block above already emits it first
     // 3C extra: conversation cards FIRST. Fix 2026-10-27: conversation was pushed AFTER the
     // readings/writing, so the feed opened with 12 old-looking Article/Writing cards and the
     // user concluded "nothing changed" (confirmed via headless-browser click test on the live
@@ -897,6 +957,7 @@ function emitPart(p,L,sess,cards,push){
     else if(p.t==="bookExercise"){const qs=L.grammar[p.key];qs.forEach((q,i)=>push({type:"grammar-check",section:p.label||"Book exercise",idx:i,kicker:`${p.label||"Book exercise"} · ${i+1} of ${qs.length}`,topic:p.label||"Book exercise",...q}));}
     else if(p.t==="quizset"){const qs=L.grammar[p.key];qs.forEach((q,i)=>push({type:"test-q",section:p.label||"Grammar Quiz",idx:i,total:qs.length,isLastOfBatch:i===qs.length-1,...q}));}
     else if(p.t==="convo")L[p.key].forEach((cv,i)=>push({type:"convo",section:"Conversation Practice",idx:i,total:L[p.key].length,...cv}));
+    else if(p.t==="conversation"&&L.conversation&&L.conversation.parts){const parts=L.conversation.parts;parts.forEach((part,i)=>push({type:"conversation",section:"Conversation",part:{...part,_allParts:parts},idx:i,total:parts.length}));}
     else if(p.t==="tapfind")push({type:"tapfind",section:"Find the pattern",lines:p.lines,prompt:p.prompt,glossary:p.glossary||{},hl:p.hl||[]});
     else if(p.t==="scanpre")L[p.src||"texts"][p.text].detailed.slice(0,2).forEach((q,i)=>push({type:"reading-scan",section:"Scan first",idx:p.text,qi:i,...L[p.src||"texts"][p.text]}));
     else if(p.t==="fullread")push({type:"reading-full",section:"Reading",idx:p.text,...L[p.src||"texts"][p.text]});
@@ -1133,8 +1194,17 @@ function unanswered(){
     return QTYPES.has(c.type)&&!el.querySelector(".opt:disabled");}).map(c=>c._i);
 }
 function fillSessionDone(){
-  const un=unanswered(),b=$("#sdBody"),t=$("#sdTitle"),btn=$("#sdNext");if(!b||!S.sess)return;
+  const un=unanswered(),b=$("#sdBody"),t=$("#sdTitle"),btn=$("#sdNext");if(!b)return;
   $("#sdPath").onclick=()=>showPage("path");
+  if(!S.sess){
+    // Section mode (openSection): no per-session bookkeeping. Previously the Continue/
+    // Back buttons here were left unbound (dead buttons). Give them sensible actions.
+    t.textContent="All done here.";
+    b.innerHTML=`<p class="p">You reached the end of this section's feed.</p>`;
+    btn.textContent="Back to lesson";
+    btn.onclick=()=>showPage("path");
+    return;
+  }
   if(un.length){
     t.textContent="Almost there";b.innerHTML=`<p class="p">${un.length} question${un.length>1?"s":""} left. Finish ${un.length>1?"them":"it"} to complete this session.</p>`;
     btn.textContent="Go to first unanswered";
@@ -1493,10 +1563,15 @@ function renderSentence(sent,glossary,hlList){
   return out;
 }
 function wrapWords(html,hl){
-  return html.replace(/([A-Za-z][A-Za-z'\-]*)/g,match=>{
-    const clean=match.replace(/[^A-Za-z'\-]/g,"").toLowerCase();
+  // html is ALREADY-ESCAPED markup. The (&[a-zA-Z]+;) alternative keeps entities like
+  // &amp; intact — without it, the word regex wrapped the "amp" inside &amp; as a .w
+  // span, splitting the entity and making the browser DISPLAY a literal "&amp;"
+  // (the reported "Personal Experience &amp; General Questions" bug).
+  return html.replace(/(&[a-zA-Z]+;)|([A-Za-z][A-Za-z'\-]*)/g,(m,ent,word)=>{
+    if(ent)return ent;
+    const clean=word.replace(/[^A-Za-z'\-]/g,"").toLowerCase();
     const isHL=hl.includes(clean);
-    return '<span class="w'+(isHL?' hl':'')+'" data-word="'+escAttr(match.replace(/[^A-Za-z'\-]/g,""))+'" data-kind="word">'+match+'</span>';
+    return '<span class="w'+(isHL?' hl':'')+'" data-word="'+escAttr(word.replace(/[^A-Za-z'\-]/g,""))+'" data-kind="word">'+word+'</span>';
   });
 }
 
@@ -1860,7 +1935,28 @@ function tapifyNode(el){
     return NodeFilter.FILTER_ACCEPT;
   }});
   const nodes=[];let n;while(n=walker.nextNode())nodes.push(n);
-  nodes.forEach(node=>{const span=document.createElement("span");span.innerHTML=wrapWords(esc(node.nodeValue),[]);node.replaceWith(span);});
+  // ROOT-CAUSE FIX 2026-10-28 (&amp; bug): the old code did
+  //   span.innerHTML=wrapWords(esc(node.nodeValue),[])
+  // — re-escaping ALREADY-DECODED DOM text, then parsing it back as HTML. The word
+  // wrapper wrapped the "amp" inside "&amp;" as a .w span, splitting the entity so the
+  // browser displayed a literal "&amp;" (e.g. "Personal Experience &amp; General Questions").
+  // Now we wrap words purely with DOM nodes — text nodes are plain text, so no entity
+  // round-trip can occur and "&" always displays as "&".
+  nodes.forEach(node=>{
+    const frag=document.createDocumentFragment();
+    node.nodeValue.split(/([A-Za-z][A-Za-z'\-]*)/).forEach(p=>{
+      if(!p)return;
+      if(/^[A-Za-z][A-Za-z'\-]*$/.test(p)){
+        const s=document.createElement("span");
+        s.className="w";
+        s.setAttribute("data-word",p.replace(/[^A-Za-z'\-]/g,""));
+        s.setAttribute("data-kind","word");
+        s.textContent=p;
+        frag.appendChild(s);
+      }else frag.appendChild(document.createTextNode(p));
+    });
+    node.replaceWith(frag);
+  });
 }
 function tapifyExtras(root){root.querySelectorAll(".grammar-teach, .qstem").forEach(tapifyNode);}
 function bindFeed(){
@@ -2270,8 +2366,22 @@ function bindFeed(){
   });
 
   /* ===== Phase B: Conversation card bindings (3C pilot) ===== */
-  // Tappable chunk highlights in conversation samples → show chunk sheet
-  feed.querySelectorAll("[data-chunk-tap]").forEach(el=>{
+  // Tappable chunk highlights in conversation samples → show chunk sheet.
+  // bindChunkTaps is factored out so it can also be called lazily after a
+  // "Show Sample Answer" expansion injects new chunk spans into the DOM.
+  bindChunkTaps(feed);
+  // One-question-at-a-time controls (Show/Hide Sample Answer, Prev/Next)
+  feed.querySelectorAll('.card[data-type="conversation"]').forEach(bindConversationCard);
+  // Part tabs (A/B/C) — jump to that part's card and reset it to its FIRST question
+  feed.querySelectorAll("[data-conv-tab]").forEach(b=>{
+    b.addEventListener("click",e=>{
+      e.stopPropagation();
+      gotoConversationPart(feed,b.dataset.convTab);
+    });
+  });
+}
+function bindChunkTaps(root){
+  root.querySelectorAll("[data-chunk-tap]").forEach(el=>{
     if(el._chunkBound)return; el._chunkBound=true;
     el.addEventListener("click",e=>{
       e.stopPropagation();
@@ -2282,7 +2392,7 @@ function bindFeed(){
       if(!c||!c.part)return;
       let chunk=null;
       for(const q of c.part.questions){
-        const f=q.chunks.find(ch=>ch.en===en);
+        const f=(q.chunks||[]).find(ch=>ch.en===en);
         if(f){chunk=f;break;}
       }
       if(!chunk)return;
@@ -2290,15 +2400,6 @@ function bindFeed(){
       card.querySelectorAll(".gl.chunk.active").forEach(x=>x.classList.remove("active"));
       el.classList.add("active");
       showChunkPopup(el,chunk);
-    });
-  });
-  // Part tabs (A/B/C) — find the card with that part and scroll to it
-  feed.querySelectorAll("[data-conv-tab]").forEach(b=>{
-    b.addEventListener("click",e=>{
-      e.stopPropagation();
-      const targetId=b.dataset.convTab;
-      const targetCard=feed.querySelector(`.card[data-type="conversation"][data-part-id="${targetId}"]`);
-      if(targetCard)targetCard.scrollIntoView({behavior:"smooth",block:"start"});
     });
   });
 }
