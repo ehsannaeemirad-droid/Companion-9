@@ -474,8 +474,10 @@ body[data-page="home"] .back-btn,body:not([data-page="lesson"]) .map-btn{display
 .hm-go{font-size:22px;color:var(--accent)}
 .hm-count{font-size:12px;font-weight:700;color:var(--muted)}
 .hm-path{padding:4px 0 8px}
-.hm-section-start{display:flex;align-items:center;justify-content:center;gap:8px;width:100%;padding:12px 16px;margin:6px 0 12px;border-radius:14px;background:color-mix(in srgb,var(--accent) 14%,transparent);border:1.5px solid var(--accent);color:var(--accent);font-size:14px;font-weight:700;cursor:pointer;transition:all .12s}
-.hm-section-start:hover{background:color-mix(in srgb,var(--accent) 22%,transparent)}
+.hm-section-start{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2px;width:100%;padding:14px 16px;margin:8px 0 14px;border-radius:14px;background:var(--accent);border:1.5px solid var(--accent);color:#fff;font-size:15px;font-weight:800;cursor:pointer;box-shadow:0 4px 14px color-mix(in srgb,var(--accent) 35%,transparent);transition:all .12s}
+.hm-section-start small{font-size:11.5px;font-weight:600;opacity:.85}
+.hm-section-start:hover{filter:brightness(1.08)}
+.hm-section-start:active{transform:scale(.98)}
 .hm-node{display:flex;align-items:center;gap:14px;width:100%;padding:9px 2px;position:relative}
 .hm-node+.hm-node::before{content:"";position:absolute;left:23px;top:-50%;height:100%;width:2px;background:var(--line-strong)}
 .hm-node .dot{position:relative;z-index:1;width:42px;height:42px;border-radius:50%;display:grid;place-items:center;font-size:13px;font-weight:800;background:var(--card);border:2px solid var(--line-strong);color:var(--fg-soft)}
@@ -534,7 +536,7 @@ body[data-page="lesson"] .next-btn{display:flex}
 <div class="word-popup" id="wordPopup"></div>
 <div class="modal-overlay" id="modal"><div class="modal-box" id="modalBox"></div></div>
 
-<script src="lessons.js"></script>
+<script src="lessons.js?v=ts3-v4.2"></script>
 <script>
 /* ============================================================
    LESSON DATA
@@ -856,22 +858,23 @@ function buildSession(id,sessOrSection){
     // Part types to EXCLUDE from "extra" section (vocab + matching + gap + quiz belong to
     // their own dedicated sessions, not the section-wide view).
     const EXTRA_EXCLUDE = section==="extra" ? new Set(["vocab","matching","gap","quiz","quizset","convo"]) : new Set();
-    (L.sessions||[]).filter(s=>s.stage===stageName).forEach(sess=>{
-      sess.parts.forEach(p=>{
-        if(EXTRA_EXCLUDE.has(p.t))return;
-        emitPart(p,L,sess,cards,push);
-      });
-    });
-    // 3C extra: add conversation cards (one per part — A, B, C). Each card shows ALL
-    // questions of that part with tappable chunk highlights. Granularity rationale: a
-    // 30-card conversation feed would be exhausting to scroll; one card per part keeps
-    // each part's questions grouped and lets the part-tab navigation jump between them.
+    // 3C extra: conversation cards FIRST. Fix 2026-10-27: conversation was pushed AFTER the
+    // readings/writing, so the feed opened with 12 old-looking Article/Writing cards and the
+    // user concluded "nothing changed" (confirmed via headless-browser click test on the live
+    // site: first 5 cards were reading-skim/scan/full; conversation at positions 12-14).
+    // Conversation is the marquee new content — it must be the first thing in the feed.
     if(section==="extra"&&L.conversation&&L.conversation.parts){
       const parts=L.conversation.parts;
       parts.forEach((part,i)=>{
         push({type:"conversation",section:"Conversation",part:{...part,_allParts:parts},idx:i,total:parts.length});
       });
     }
+    (L.sessions||[]).filter(s=>s.stage===stageName).forEach(sess=>{
+      sess.parts.forEach(p=>{
+        if(EXTRA_EXCLUDE.has(p.t))return;
+        emitPart(p,L,sess,cards,push);
+      });
+    });
     push({type:"session-done",section:"Wrap"});
     return cards;
   }
@@ -931,8 +934,11 @@ function renderPath(){
       const stageLabel=stage==="Coursebook"?"📖 Coursebook":"⭐ Extra practice";
       h+=`<div class="pth-stage">${stageLabel}</div>`;
       // Section-level "Start" button — only if buildSession(lessonId, section) would return cards.
+      // Solid accent background + descriptive sub-label so it's unmissable vs the per-session buttons.
       if(sectionHasCards(sectionName)){
-        h+=`<button class="hm-section-start" data-section="${sectionName}">▶ Start ${esc(stageLabel.replace(/^[^\s]+\s/,""))}</button>`;
+        const mainLabel=stage==="Coursebook"?"Start Coursebook":"Start Extra practice";
+        const subLabel=stage==="Coursebook"?"All book sessions in one feed":"Conversation (new) · Readings · Writing";
+        h+=`<button class="hm-section-start" data-section="${sectionName}"><span>▶ ${esc(mainLabel)}</span><small>${esc(subLabel)}</small></button>`;
       }
       h+=`<div class="hm-path">`;
     }
@@ -1861,6 +1867,10 @@ function bindFeed(){
   const feed=$("#feed");
   tapifyExtras(feed);
   feed.querySelectorAll(".w, .gl").forEach(el=>{
+    // Conversation chunks (data-chunk-tap) have their own popup (def/example/fa/Add) —
+    // never let the generic dictionary-word popup fire on them. Fix 2026-10-27: the
+    // reading-tap timer below would overwrite the chunk popup 240ms after tap.
+    if(el.dataset.chunkTap)return;
     if(el._wbound)return; el._wbound=true;
     let tapTimer=null;
     el.addEventListener("click",e=>{
@@ -2183,6 +2193,10 @@ function bindFeed(){
 
   // ===== READING — tap for word, double-tap for sentence =====
   feed.querySelectorAll(".w, .gl").forEach(el=>{
+    // Skip conversation chunks — their own [data-chunk-tap] handler owns the popup.
+    // Without this guard, the 240ms tap-timer re-shows the generic word popup and
+    // overwrites the chunk popup right after it opens (observed on production).
+    if(el.dataset.chunkTap)return;
     let tapTimer=null;
     el.addEventListener("click",e=>{
       if(window.getSelection().toString().length>0)return;
@@ -2290,12 +2304,14 @@ function bindFeed(){
 }
 
 function showChunkPopup(anchorEl,chunk){
-  // chunk: {en, def, example, fa}
+  // chunk: {en, def, example, fa}. Strip the /* TODO(fa-review) */ source tag for display
+  // and for the SRS card — it's a review-tracking marker, not user-facing content.
+  const cleanFa=chunk.fa.replace(/\/\* TODO\(fa-review\) \*\//g,"").trim();
   const html=`
     <b>${esc(chunk.en)}</b>
     <div class="en" style="font-size:13px;margin-top:4px">${esc(chunk.def)}</div>
     <div class="en" style="font-style:italic;font-size:13px;margin-top:6px">${esc(chunk.example)}</div>
-    <div dir="rtl" style="font-family:var(--farsi);font-size:14px;margin-top:8px;text-align:right">${esc(chunk.fa)}</div>
+    <div dir="rtl" style="font-family:var(--farsi);font-size:14px;margin-top:8px;text-align:right">${esc(cleanFa)}</div>
     <div class="actions">
       <button class="mini" data-chunk-speak="${escAttr(chunk.en)}">🔊 Play</button>
       <button class="mini" data-chunk-add>Add to flashcards</button>
@@ -2305,8 +2321,6 @@ function showChunkPopup(anchorEl,chunk){
   popup.querySelector("[data-chunk-speak]").onclick=e=>{e.stopPropagation();speak(chunk.en);};
   popup.querySelector("[data-chunk-add]").onclick=e=>{
     e.stopPropagation();
-    // Strip the /* TODO(fa-review) */ tag from fa when adding to SRS (the tag is for source review, not for user display)
-    const cleanFa=chunk.fa.replace(/\/\* TODO\(fa-review\) \*\//g,"").trim();
     const added=addSrs({type:"chunk",front:chunk.en,backFa:cleanFa,ex:chunk.example,lesson:S.lesson});
     sChime();
     popup.querySelector("[data-chunk-add]").textContent=added?"Added ✓":"In review";
